@@ -10,9 +10,12 @@ A backend API for managing users, projects, tasks, task assignments, and a task-
 - [Project Structure](#project-structure)
 - [Getting Started](#getting-started)
 - [Domain Model](#domain-model)
+- [Authentication and authorization](#authentication-and-authorization)
 - [API Endpoints](#api-endpoints)
 - [Pagination, sorting, and filtering](#pagination-sorting-and-filtering)
 - [Validation](#validation)
+- [Idempotency](#idempotency)
+- [Audit logging](#audit-logging)
 - [Error responses](#error-responses)
 - [Transactions and concurrency](#transactions-and-concurrency)
 - [API documentation (Swagger / OpenAPI)](#api-documentation-swagger--openapi)
@@ -20,13 +23,14 @@ A backend API for managing users, projects, tasks, task assignments, and a task-
 
 ## Status
 
-Week 1 complete: layered architecture, the core domain model, 26 REST endpoints across five resources, validation (including a custom DB-backed rule and a cross-field rule), centralized error handling, and optimistic locking on the two entities most exposed to concurrent writes. See `docs/progress.md` for the running log.
+Week 1 and Week 2 complete. Week 1 built the layered architecture, the core domain model, 26 REST endpoints across five resources, validation, centralized error handling, and optimistic locking. Week 2 added JWT authentication, role- and ownership-based authorization, the full account lifecycle (registration, activation, suspension, password reset), audit logging, and idempotency support for critical write operations. See `docs/progress.md` for the running log.
 
 ## Tech Stack
 
 - Java 17
 - Spring Boot 3.3
 - Spring MVC (REST controllers)
+- Spring Security (JWT, method security)
 - Spring Data JPA / Hibernate
 - PostgreSQL (H2 for local dev)
 - Jakarta Bean Validation
@@ -41,7 +45,7 @@ A standard layered structure: controller, then service, then repository, with DT
 
 ```
 src/main/java/com/relic/backend/
-  config/            application-level configuration (OpenAPI)
+  config/            application-level configuration (OpenAPI, idempotency filter)
   controller/        REST controllers
   service/           service interfaces
   service/impl/      service implementations
@@ -50,6 +54,8 @@ src/main/java/com/relic/backend/
   dto/               request/response DTOs
   dto/validation/    custom Bean Validation annotations and validators
   exception/         custom exceptions and centralized error handling
+  security/          JWT issuing/validation, Spring Security config, ownership-based authorization checks
+  audit/             the single place that writes to the audit log
 ```
 
 ## Getting Started
@@ -62,13 +68,26 @@ src/main/java/com/relic/backend/
 
 ### Run locally
 
+As of Week 2, a few environment variables are required at startup regardless of profile — there are no committed defaults, on purpose (see `docs/security-report.md`). `scripts/set-local-env.sh` is a gitignored convenience script with placeholder values you can edit and source:
+
 ```bash
+source scripts/set-local-env.sh
 mvn spring-boot:run
 ```
 
-The app starts on `http://localhost:8080` with the `dev` profile active by default (H2 in-memory database, console at `/h2-console`). No environment variables are required for local dev.
+Or export them directly:
 
-To run against PostgreSQL, activate the `postgres` profile and set the connection details — there are no committed defaults for these, on purpose:
+```bash
+export JWT_SECRET=<a-random-string-at-least-32-bytes-long>
+export ADMIN_BOOTSTRAP_USERNAME=admin
+export ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+export ADMIN_BOOTSTRAP_PASSWORD=<choose-your-own>
+mvn spring-boot:run
+```
+
+The app starts on `http://localhost:8080` with the `dev` profile active by default (H2 in-memory database, console at `/h2-console`). On first startup, one `ADMIN` account is created automatically from the `ADMIN_BOOTSTRAP_*` variables (see `AdminBootstrapSeeder`) — that's the only way to get an initial account, since self-registration always creates a `DEVELOPER`.
+
+To run against PostgreSQL, activate the `postgres` profile and also set the connection details:
 
 ```bash
 export DB_HOST=localhost
@@ -89,6 +108,39 @@ Five entities: `User`, `Project`, `ProjectMember`, `Task`, `Assignment`, and `Ap
 - `Approval` belongs to a `Task` (one-to-many: a task can accumulate multiple approval requests over its life) and references two different `User`s — the one who requested the approval and the one who decided it.
 
 Full diagram and constraint details: [`docs/erd.md`](docs/erd.md).
+
+## Authentication and authorization
+
+Every endpoint requires a valid JWT access token except the auth endpoints themselves, Swagger/OpenAPI, and the actuator health check (`SecurityConfig.PUBLIC_ENDPOINTS`).
+
+### Account lifecycle
+
+| Method | Endpoint | Description |
+|--------|----------|--------------|
+| POST   | `/api/v1/auth/register` | Self-register a new account — always created as `DEVELOPER`, `PENDING_ACTIVATION` |
+| POST   | `/api/v1/auth/activate` | Activate an account with the token from registration |
+| POST   | `/api/v1/auth/login` | Exchange username/password for an access token and a refresh token |
+| POST   | `/api/v1/auth/refresh` | Exchange a refresh token for a new access token (rotates the refresh token) |
+| POST   | `/api/v1/auth/logout` | Revoke a refresh token |
+| POST   | `/api/v1/auth/forgot-password` | Request a password reset token |
+| POST   | `/api/v1/auth/reset-password` | Reset a password with a valid reset token |
+| PATCH  | `/api/v1/users/{id}/status` | ADMIN-only: suspend or reactivate a user |
+| GET    | `/api/v1/users/me` | Any authenticated user: view their own profile |
+
+`RegisterResponse.activationToken` and `ForgotPasswordResponse.resetToken` are returned directly in the response — this project has no email-sending infrastructure to deliver them through. In a real deployment these would be emailed, never returned by the API (see `docs/security-report.md`).
+
+### Tokens
+
+Access tokens are short-lived JWTs (`ACCESS_TOKEN_EXPIRATION_MINUTES`, default 15 minutes), signed with `JWT_SECRET`. Refresh tokens are opaque, long-lived (`REFRESH_TOKEN_EXPIRATION_DAYS`, default 7 days), stored only as a SHA-256 hash, and rotated on every use — a stolen refresh token stops working the moment it's used once, and logging out, resetting a password, or being suspended all revoke it immediately rather than waiting for it to expire naturally.
+
+### Roles and ownership
+
+Three roles: `ADMIN`, `MANAGER`, `DEVELOPER`. Beyond plain role checks (`@PreAuthorize("hasRole(...)")`), two rules depend on the specific record, not just the role, backed by `AuthorizationService` (the `authz` bean):
+
+- A `MANAGER` can only update/delete a project, or manage its membership, if they are that specific project's `OWNER` member (set automatically on the project they create).
+- A `DEVELOPER` can only change the status of a task, or request its approval, if they are actively assigned to that specific task.
+
+Full breakdown: [`docs/role-permission-matrix.md`](docs/role-permission-matrix.md). Threat model and mitigations: [`docs/security-report.md`](docs/security-report.md).
 
 ## API Endpoints
 
@@ -150,12 +202,12 @@ An unlisted transition is rejected with a 409 naming both states. A task is also
 
 | Method | Endpoint | Description |
 |--------|----------|--------------|
-| POST   | `/api/v1/tasks/{taskId}/approvals` | Request approval on a task (`{requestedByUserId, comments}`) |
-| PATCH  | `/api/v1/approvals/{id}/decision` | Approve, reject, or cancel a pending approval (`{decidedByUserId, status, comments}`) |
+| POST   | `/api/v1/tasks/{taskId}/approvals` | Request approval on a task (`{comments}`) — the requester is the authenticated user, not a client-supplied id |
+| PATCH  | `/api/v1/approvals/{id}/decision` | Approve, reject, or cancel a pending approval (`{status, comments}`) — the decider is the authenticated user |
 | GET    | `/api/v1/approvals` | List approvals, paginated, optional `?taskId=&status=` filters |
 | GET    | `/api/v1/approvals/{id}` | Get an approval by id |
 
-Only one `PENDING` approval is allowed per task at a time. Approving one moves the underlying task to `DONE`; rejecting one leaves the task's status untouched so work can continue.
+Only one `PENDING` approval is allowed per task at a time. Approving one moves the underlying task to `DONE`; rejecting one leaves the task's status untouched so work can continue. Whoever decides an approval can never be the same person who requested it, regardless of role — self-approval is rejected with a 409.
 
 ## Pagination, sorting, and filtering
 
@@ -173,6 +225,14 @@ Every write endpoint validates its request body with Jakarta Bean Validation (`@
 
 - **`@UniqueUsername`** (`dto/validation`) — a field-level custom constraint that checks the database for an existing username before a user is created, so a duplicate username is rejected as a 400 validation error (with a field-level message) rather than only being caught later as a 409 at the service layer.
 - **`@ValidApprovalDecision`** (`dto/validation`) — a class-level, cross-field constraint on `ApprovalDecisionRequest`: if `status` is `REJECTED`, `comments` must be non-blank, so a rejection is never recorded without a reason attached.
+
+## Idempotency
+
+`POST /api/v1/tasks`, `POST /api/v1/projects`, and `POST /api/v1/auth/register` accept an optional `Idempotency-Key` header. Sending the same key on a retried request (after a timeout or dropped connection, for example) returns the original response again rather than creating a second record. A request without the header behaves exactly as before — the header is opt-in, not required. See `IdempotencyFilter` for the implementation and its documented in-process (single-instance) limitation.
+
+## Audit logging
+
+Security- and business-critical actions are recorded to a single `audit_log` table via `AuditService` — the only class in this codebase that writes to it, which is what makes "never log a secret" an enforceable rule rather than a convention every call site has to remember. Each entry captures who (`username`), what (`action`), on which record (`resourceType`/`resourceId`), whether it succeeded, and a short, non-sensitive note. Currently covered: registration, activation, login (including failed attempts), token refresh, logout, password reset requests and completions, user creation and status changes, project creation, task status changes, and approval requests/decisions (including blocked self-approval attempts).
 
 ## Error responses
 
@@ -208,4 +268,6 @@ Interactive API docs are available once the app is running:
 
 - [`docs/erd.md`](docs/erd.md) — entity relationship diagram, relationships, keys, and indexing notes
 - [`docs/concurrency-design.md`](docs/concurrency-design.md) — transaction boundaries, propagation/rollback behavior, and concurrency handling
+- [`docs/role-permission-matrix.md`](docs/role-permission-matrix.md) — what each role can do, including the ownership-based rules
+- [`docs/security-report.md`](docs/security-report.md) — threat model, mitigations, and known limitations
 - [`docs/progress.md`](docs/progress.md) — running log of what's been built

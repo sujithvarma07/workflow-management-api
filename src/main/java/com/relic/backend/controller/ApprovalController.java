@@ -12,6 +12,8 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -20,15 +22,22 @@ public class ApprovalController {
 
     private final ApprovalService approvalService;
 
+    // Open to any authenticated role - the ownership rule (DEVELOPER can
+    // only request approval on their own assigned task) is enforced inside
+    // ApprovalServiceImpl, since it needs a database lookup the @PreAuthorize
+    // SpEL on its own can't express cleanly here.
     @PostMapping("/api/v1/tasks/{taskId}/approvals")
     public ResponseEntity<ApprovalResponse> requestApproval(
-            @PathVariable Long taskId, @Valid @RequestBody ApprovalRequest request) {
-        return ResponseEntity.status(HttpStatus.CREATED).body(approvalService.requestApproval(taskId, request));
+            @PathVariable Long taskId, @Valid @RequestBody ApprovalRequest request, Authentication authentication) {
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(approvalService.requestApproval(taskId, request, authentication.getName()));
     }
 
     @PatchMapping("/api/v1/approvals/{id}/decision")
-    public ApprovalResponse decide(@PathVariable Long id, @Valid @RequestBody ApprovalDecisionRequest request) {
-        return approvalService.decide(id, request);
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
+    public ApprovalResponse decide(
+            @PathVariable Long id, @Valid @RequestBody ApprovalDecisionRequest request, Authentication authentication) {
+        return approvalService.decide(id, request, authentication.getName());
     }
 
     @GetMapping("/api/v1/approvals")

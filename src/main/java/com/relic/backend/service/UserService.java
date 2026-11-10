@@ -2,6 +2,7 @@ package com.relic.backend.service;
 
 import com.relic.backend.dto.UserCreateRequest;
 import com.relic.backend.dto.UserResponse;
+import com.relic.backend.dto.UserStatusUpdateRequest;
 import com.relic.backend.dto.UserUpdateRequest;
 import com.relic.backend.entity.UserRole;
 import org.springframework.data.domain.Page;
@@ -15,7 +16,11 @@ public interface UserService {
 
     UserResponse getById(Long id);
 
+    UserResponse getByUsername(String username);
+
     UserResponse update(Long id, UserUpdateRequest request);
+
+    UserResponse updateStatus(Long id, UserStatusUpdateRequest request);
 
     void delete(Long id);
 }

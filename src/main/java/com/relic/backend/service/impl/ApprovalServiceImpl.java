@@ -1,5 +1,6 @@
 package com.relic.backend.service.impl;
 
+import com.relic.backend.audit.AuditService;
 import com.relic.backend.dto.ApprovalDecisionRequest;
 import com.relic.backend.dto.ApprovalRequest;
 import com.relic.backend.dto.ApprovalResponse;
@@ -8,16 +9,19 @@ import com.relic.backend.entity.ApprovalStatus;
 import com.relic.backend.entity.Task;
 import com.relic.backend.entity.TaskStatus;
 import com.relic.backend.entity.User;
+import com.relic.backend.entity.UserRole;
 import com.relic.backend.exception.DuplicateResourceException;
 import com.relic.backend.exception.InvalidStateTransitionException;
 import com.relic.backend.exception.ResourceNotFoundException;
 import com.relic.backend.repository.ApprovalRepository;
+import com.relic.backend.repository.AssignmentRepository;
 import com.relic.backend.repository.TaskRepository;
 import com.relic.backend.repository.UserRepository;
 import com.relic.backend.service.ApprovalService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,19 +34,28 @@ public class ApprovalServiceImpl implements ApprovalService {
     private final ApprovalRepository approvalRepository;
     private final TaskRepository taskRepository;
     private final UserRepository userRepository;
+    private final AssignmentRepository assignmentRepository;
+    private final AuditService auditService;
 
     @Override
     @Transactional
-    public ApprovalResponse requestApproval(Long taskId, ApprovalRequest request) {
+    public ApprovalResponse requestApproval(Long taskId, ApprovalRequest request, String requestingUsername) {
         Task task = taskRepository.findById(taskId)
                 .orElseThrow(() -> new ResourceNotFoundException("Task not found with id " + taskId));
-        User requestedBy = userRepository.findById(request.requestedByUserId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "User not found with id " + request.requestedByUserId()));
+        User requestedBy = userRepository.findByUsernameIgnoreCase(requestingUsername)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + requestingUsername));
 
-        // Only one approval request can be open (PENDING) for a task at a
-        // time - otherwise two reviewers could decide the same request
-        // independently and race each other.
+        // Ownership-based rule: a DEVELOPER may only request approval on a
+        // task they are actually, currently assigned to - they can't ask
+        // for someone else's work to be reviewed. ADMIN and MANAGER are
+        // exempt since requesting approval on a team member's behalf is a
+        // legitimate part of their role.
+        if (requestedBy.getRole() == UserRole.DEVELOPER
+                && !assignmentRepository.existsByTaskIdAndUserIdAndActiveTrue(taskId, requestedBy.getId())) {
+            throw new AccessDeniedException(
+                    "Only a user actively assigned to this task may request its approval");
+        }
+
         if (approvalRepository.existsByTaskIdAndStatus(taskId, ApprovalStatus.PENDING)) {
             throw new DuplicateResourceException(
                     "Task " + taskId + " already has a pending approval request");
@@ -54,12 +67,16 @@ public class ApprovalServiceImpl implements ApprovalService {
                 .comments(request.comments())
                 .build();
 
-        return toResponse(approvalRepository.save(approval));
+        Approval saved = approvalRepository.save(approval);
+        auditService.success(requestingUsername, "APPROVAL_REQUESTED", "Approval", String.valueOf(saved.getId()),
+                "taskId=" + taskId);
+
+        return toResponse(saved);
     }
 
     @Override
     @Transactional
-    public ApprovalResponse decide(Long approvalId, ApprovalDecisionRequest request) {
+    public ApprovalResponse decide(Long approvalId, ApprovalDecisionRequest request, String decidingUsername) {
         Approval approval = approvalRepository.findById(approvalId)
                 .orElseThrow(() -> new ResourceNotFoundException("Approval not found with id " + approvalId));
 
@@ -71,9 +88,20 @@ public class ApprovalServiceImpl implements ApprovalService {
             throw new InvalidStateTransitionException("A decision must be APPROVED, REJECTED, or CANCELLED");
         }
 
-        User decidedBy = userRepository.findById(request.decidedByUserId())
-                .orElseThrow(() -> new ResourceNotFoundException(
-                        "User not found with id " + request.decidedByUserId()));
+        User decidedBy = userRepository.findByUsernameIgnoreCase(decidingUsername)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found: " + decidingUsername));
+
+        // Self-approval is a business rule, not just an access-control
+        // check - an ADMIN or MANAGER requesting approval on their own work
+        // is allowed (see requestApproval), but deciding that same request
+        // themselves defeats the point of a review. This is checked here,
+        // against the actual requester on record, rather than relying on
+        // the client to not do it.
+        if (decidedBy.getId().equals(approval.getRequestedBy().getId())) {
+            auditService.failure(decidingUsername, "APPROVAL_DECIDED", "Approval", String.valueOf(approvalId),
+                    "self-approval blocked");
+            throw new InvalidStateTransitionException("You cannot approve or reject your own request");
+        }
 
         approval.setStatus(request.status());
         approval.setDecidedBy(decidedBy);
@@ -94,7 +122,11 @@ public class ApprovalServiceImpl implements ApprovalService {
             }
         }
 
-        return toResponse(approvalRepository.save(approval));
+        Approval saved = approvalRepository.save(approval);
+        auditService.success(decidingUsername, "APPROVAL_DECIDED", "Approval", String.valueOf(approvalId),
+                "status=" + request.status());
+
+        return toResponse(saved);
     }
 
     @Override

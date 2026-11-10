@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -18,6 +19,7 @@ public class AssignmentController {
     private final AssignmentService assignmentService;
 
     @PostMapping("/api/v1/tasks/{taskId}/assignments")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public ResponseEntity<AssignmentResponse> assign(
             @PathVariable Long taskId, @Valid @RequestBody AssignmentRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(assignmentService.assign(taskId, request));
@@ -29,6 +31,7 @@ public class AssignmentController {
     }
 
     @DeleteMapping("/api/v1/assignments/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public ResponseEntity<Void> unassign(@PathVariable Long id) {
         assignmentService.unassign(id);
         return ResponseEntity.noContent().build();

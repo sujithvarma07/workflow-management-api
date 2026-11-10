@@ -5,11 +5,10 @@ import com.relic.backend.entity.ApprovalStatus;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
+// decidedByUserId is likewise derived from the authenticated principal now,
+// not supplied by the client - see ApprovalRequest for why.
 @ValidApprovalDecision
 public record ApprovalDecisionRequest(
-
-        @NotNull(message = "decidedByUserId is required")
-        Long decidedByUserId,
 
         @NotNull(message = "status is required")
         ApprovalStatus status,

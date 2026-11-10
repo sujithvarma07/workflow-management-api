@@ -1,6 +1,7 @@
 package com.relic.backend.dto;
 
 import com.relic.backend.entity.UserRole;
+import com.relic.backend.entity.UserStatus;
 
 import java.time.Instant;
 
@@ -10,6 +11,8 @@ public record UserResponse(
         String email,
         String fullName,
         UserRole role,
-        Instant createdAt
+        UserStatus status,
+        Instant createdAt,
+        Instant lastLoginAt
 ) {
 }

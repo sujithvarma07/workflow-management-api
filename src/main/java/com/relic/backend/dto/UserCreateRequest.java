@@ -8,6 +8,10 @@ import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+// This is the ADMIN-only path for creating an account directly (already
+// ACTIVE, no activation email/token round trip) - distinct from
+// POST /api/v1/auth/register, which is how someone creates their own
+// DEVELOPER account and must activate it before logging in.
 public record UserCreateRequest(
 
         @NotBlank(message = "username is required")
@@ -25,6 +29,13 @@ public record UserCreateRequest(
         String fullName,
 
         @NotNull(message = "role is required")
-        UserRole role
+        UserRole role,
+
+        @NotBlank(message = "password is required")
+        @Size(min = 8, max = 100, message = "password must be at least 8 characters")
+        @Pattern(
+                regexp = "^(?=.*[A-Za-z])(?=.*\\d).+$",
+                message = "password must contain at least one letter and one digit")
+        String password
 ) {
 }

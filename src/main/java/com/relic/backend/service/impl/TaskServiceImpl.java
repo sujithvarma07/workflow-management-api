@@ -1,5 +1,6 @@
 package com.relic.backend.service.impl;
 
+import com.relic.backend.audit.AuditService;
 import com.relic.backend.dto.TaskRequest;
 import com.relic.backend.dto.TaskResponse;
 import com.relic.backend.dto.TaskStatusUpdateRequest;
@@ -10,6 +11,7 @@ import com.relic.backend.exception.InvalidStateTransitionException;
 import com.relic.backend.exception.ResourceNotFoundException;
 import com.relic.backend.repository.ProjectRepository;
 import com.relic.backend.repository.TaskRepository;
+import com.relic.backend.security.SecurityUtils;
 import com.relic.backend.service.TaskService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -38,6 +40,7 @@ public class TaskServiceImpl implements TaskService {
 
     private final TaskRepository taskRepository;
     private final ProjectRepository projectRepository;
+    private final AuditService auditService;
 
     @Override
     @Transactional
@@ -122,7 +125,12 @@ public class TaskServiceImpl implements TaskService {
         }
 
         task.setStatus(target);
-        return toResponse(taskRepository.save(task));
+        TaskResponse response = toResponse(taskRepository.save(task));
+
+        auditService.success(SecurityUtils.currentUsername(), "TASK_STATUS_CHANGED", "Task",
+                String.valueOf(id), current + " -> " + target);
+
+        return response;
     }
 
     @Override

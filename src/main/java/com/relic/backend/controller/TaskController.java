@@ -12,6 +12,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -22,6 +23,7 @@ public class TaskController {
     private final TaskService taskService;
 
     @PostMapping
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public ResponseEntity<TaskResponse> create(@Valid @RequestBody TaskRequest request) {
         return ResponseEntity.status(HttpStatus.CREATED).body(taskService.create(request));
     }
@@ -40,16 +42,23 @@ public class TaskController {
     }
 
     @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public TaskResponse update(@PathVariable Long id, @Valid @RequestBody TaskRequest request) {
         return taskService.update(id, request);
     }
 
+    // A DEVELOPER may move a task's status along, but only for a task they
+    // are currently, actively assigned to - this is the ownership rule:
+    // being a DEVELOPER grants no authority over tasks in general, only
+    // over the specific ones assigned to that person.
     @PatchMapping("/{id}/status")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER') or @authz.isTaskAssignee(#id, authentication.name)")
     public TaskResponse updateStatus(@PathVariable Long id, @Valid @RequestBody TaskStatusUpdateRequest request) {
         return taskService.updateStatus(id, request);
     }
 
     @DeleteMapping("/{id}")
+    @PreAuthorize("hasAnyRole('ADMIN','MANAGER')")
     public ResponseEntity<Void> delete(@PathVariable Long id) {
         taskService.delete(id);
         return ResponseEntity.noContent().build();

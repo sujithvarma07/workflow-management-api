@@ -9,9 +9,9 @@ import org.springframework.data.domain.Pageable;
 
 public interface ApprovalService {
 
-    ApprovalResponse requestApproval(Long taskId, ApprovalRequest request);
+    ApprovalResponse requestApproval(Long taskId, ApprovalRequest request, String requestingUsername);
 
-    ApprovalResponse decide(Long approvalId, ApprovalDecisionRequest request);
+    ApprovalResponse decide(Long approvalId, ApprovalDecisionRequest request, String decidingUsername);
 
     Page<ApprovalResponse> getAll(Long taskId, ApprovalStatus status, Pageable pageable);
 

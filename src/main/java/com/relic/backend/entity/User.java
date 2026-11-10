@@ -38,11 +38,35 @@ public class User {
     @Column(nullable = false, length = 20)
     private UserRole role;
 
+    // BCrypt hash only - the plaintext password is never persisted or
+    // returned on any response DTO.
+    @Column(name = "password_hash", nullable = false)
+    private String passwordHash;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 25)
+    private UserStatus status;
+
+    @Column(name = "activation_token")
+    private String activationToken;
+
+    @Column(name = "password_reset_token")
+    private String passwordResetToken;
+
+    @Column(name = "password_reset_expires_at")
+    private Instant passwordResetExpiresAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
+
+    @Column(name = "last_login_at")
+    private Instant lastLoginAt;
 
     @PrePersist
     protected void onCreate() {
         this.createdAt = Instant.now();
+        if (this.status == null) {
+            this.status = UserStatus.PENDING_ACTIVATION;
+        }
     }
 }

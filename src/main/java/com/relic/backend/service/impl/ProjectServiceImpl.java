@@ -4,8 +4,10 @@ import com.relic.backend.dto.ProjectMemberRequest;
 import com.relic.backend.dto.ProjectMemberResponse;
 import com.relic.backend.dto.ProjectRequest;
 import com.relic.backend.dto.ProjectResponse;
+import com.relic.backend.audit.AuditService;
 import com.relic.backend.entity.Project;
 import com.relic.backend.entity.ProjectMember;
+import com.relic.backend.entity.ProjectMemberRole;
 import com.relic.backend.entity.ProjectStatus;
 import com.relic.backend.entity.User;
 import com.relic.backend.exception.DuplicateResourceException;
@@ -13,6 +15,7 @@ import com.relic.backend.exception.ResourceNotFoundException;
 import com.relic.backend.repository.ProjectMemberRepository;
 import com.relic.backend.repository.ProjectRepository;
 import com.relic.backend.repository.UserRepository;
+import com.relic.backend.security.SecurityUtils;
 import com.relic.backend.service.ProjectService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -29,6 +32,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final ProjectRepository projectRepository;
     private final ProjectMemberRepository projectMemberRepository;
     private final UserRepository userRepository;
+    private final AuditService auditService;
 
     @Override
     @Transactional
@@ -43,7 +47,31 @@ public class ProjectServiceImpl implements ProjectService {
                 .status(request.status())
                 .build();
 
-        return toResponse(projectRepository.save(project));
+        Project saved = projectRepository.save(project);
+
+        // The creator is automatically added as the project's OWNER
+        // member. Without this, a MANAGER who just created a project could
+        // never manage its membership afterward - @PreAuthorize on
+        // addMember/removeMember/update/delete requires either ADMIN or an
+        // existing OWNER membership, and a brand-new project has no
+        // members at all yet. An ADMIN creator is added too, for
+        // visibility in the member list, even though ADMIN already
+        // bypasses the ownership check everywhere else.
+        String creatorUsername = SecurityUtils.currentUsername();
+        if (creatorUsername != null) {
+            userRepository.findByUsernameIgnoreCase(creatorUsername).ifPresent(creator -> {
+                ProjectMember ownerMembership = ProjectMember.builder()
+                        .project(saved)
+                        .user(creator)
+                        .roleInProject(ProjectMemberRole.OWNER)
+                        .build();
+                projectMemberRepository.save(ownerMembership);
+            });
+        }
+
+        auditService.success(creatorUsername, "PROJECT_CREATED", "Project", String.valueOf(saved.getId()), null);
+
+        return toResponse(saved);
     }
 
     @Override
