@@ -14,6 +14,8 @@ import com.relic.backend.repository.TaskRepository;
 import com.relic.backend.security.SecurityUtils;
 import com.relic.backend.service.TaskService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -23,6 +25,14 @@ import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * Task lookups by id are cached under the "tasks" cache (see
+ * CacheConfig); update/updateStatus/delete evict that entry. A task's
+ * status can also change outside this class - ApprovalServiceImpl
+ * saves the Task directly when an approval is granted - and that path
+ * performs its own manual eviction of this same cache, since a direct
+ * repository save does not go through this class's @CacheEvict.
+ */
 @Service
 @RequiredArgsConstructor
 public class TaskServiceImpl implements TaskService {
@@ -78,12 +88,14 @@ public class TaskServiceImpl implements TaskService {
 
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(value = "tasks", key = "#id")
     public TaskResponse getById(Long id) {
         return toResponse(findTaskOrThrow(id));
     }
 
     @Override
     @Transactional
+    @CacheEvict(value = "tasks", key = "#id")
     public TaskResponse update(Long id, TaskRequest request) {
         Task task = findTaskOrThrow(id);
 
@@ -109,6 +121,7 @@ public class TaskServiceImpl implements TaskService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "tasks", key = "#id")
     public TaskResponse updateStatus(Long id, TaskStatusUpdateRequest request) {
         Task task = findTaskOrThrow(id);
         TaskStatus current = task.getStatus();
@@ -135,6 +148,7 @@ public class TaskServiceImpl implements TaskService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "tasks", key = "#id")
     public void delete(Long id) {
         Task task = findTaskOrThrow(id);
         taskRepository.delete(task);

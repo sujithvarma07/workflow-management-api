@@ -18,7 +18,10 @@ import com.relic.backend.repository.AssignmentRepository;
 import com.relic.backend.repository.TaskRepository;
 import com.relic.backend.repository.UserRepository;
 import com.relic.backend.service.ApprovalService;
+import com.relic.backend.messaging.TaskCompletedApplicationEvent;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.CacheManager;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.access.AccessDeniedException;
@@ -36,6 +39,8 @@ public class ApprovalServiceImpl implements ApprovalService {
     private final UserRepository userRepository;
     private final AssignmentRepository assignmentRepository;
     private final AuditService auditService;
+    private final ApplicationEventPublisher applicationEventPublisher;
+    private final CacheManager cacheManager;
 
     @Override
     @Transactional
@@ -119,6 +124,23 @@ public class ApprovalServiceImpl implements ApprovalService {
             if (task.getStatus() != TaskStatus.DONE) {
                 task.setStatus(TaskStatus.DONE);
                 taskRepository.save(task);
+
+                // This bypasses TaskServiceImpl, so its @CacheEvict on
+                // update/updateStatus never runs for this change - evict
+                // the "tasks" entry for this id by hand so a cached,
+                // now-stale pre-DONE TaskResponse is not served after
+                // approval. evictIfPresent is a no-op if nothing is
+                // cached for this id yet, which is fine either way.
+                var tasksCache = cacheManager.getCache("tasks");
+                if (tasksCache != null) {
+                    tasksCache.evictIfPresent(task.getId());
+                }
+
+                // Published now, inside this transaction, but only actually
+                // sent to RabbitMQ after it commits - see
+                // TaskCompletedEventPublisher for why the two are split.
+                applicationEventPublisher.publishEvent(new TaskCompletedApplicationEvent(
+                        this, task.getId(), task.getTitle(), task.getProject().getId()));
             }
         }
 

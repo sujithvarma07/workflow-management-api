@@ -264,10 +264,21 @@ Interactive API docs are available once the app is running:
 - Swagger UI: `http://localhost:8080/swagger-ui.html`
 - Raw OpenAPI spec: `http://localhost:8080/v3/api-docs`
 
+## Week 3 — Advanced Integration, Asynchronous Processing, and Reliability
+
+- **External API integration**: `ExternalNotificationClient` calls an external notification endpoint over `WebClient`, with an explicit connect timeout and response timeout, and a Resilience4j circuit breaker (`externalNotification`) that fails fast once the dependency is unhealthy instead of piling up slow requests against it.
+- **Asynchronous jobs**: bulk task import and project report generation both run as background jobs (`JobService`/`JobController`) on a dedicated bounded thread pool, tracked in a `Job` table and polled via `GET /api/v1/jobs/{id}`. Bulk import processes items in configurable chunks (default 50), each in its own transaction, with per-item partial-failure tolerance.
+- **Messaging**: completing a task (via approval) publishes a RabbitMQ event (`workflow.events` exchange) only after the enclosing database transaction commits. Consumption is idempotent (a dedup table keyed on message id), failed messages are retried with backoff and then dead-lettered rather than lost, and an admin endpoint can replay the dead-letter queue once the underlying issue is fixed.
+- **Caching**: `Project`/`Task`/`User` lookups by id are cached (in-memory for dev/test, Redis for the `postgres` profile), evicted explicitly on every write path, including the one path (task completion via approval) that updates the entity outside its normal service.
+- **Health and readiness**: Kubernetes-style liveness/readiness probes are exposed at `/actuator/health/liveness` and `/actuator/health/readiness`, including real RabbitMQ/Redis connectivity in the readiness check.
+- **Request tracing**: every request is tagged with a correlation id (an inbound `X-Correlation-Id` header, or a generated one), present in every log line for that request and echoed back on the response.
+- Full design rationale, including what could and couldn't be verified without a live broker/cache/external endpoint in this environment: [`docs/reliability-report.md`](docs/reliability-report.md).
+
 ## Documentation
 
 - [`docs/erd.md`](docs/erd.md) — entity relationship diagram, relationships, keys, and indexing notes
 - [`docs/concurrency-design.md`](docs/concurrency-design.md) — transaction boundaries, propagation/rollback behavior, and concurrency handling
 - [`docs/role-permission-matrix.md`](docs/role-permission-matrix.md) — what each role can do, including the ownership-based rules
 - [`docs/security-report.md`](docs/security-report.md) — threat model, mitigations, and known limitations
+- [`docs/reliability-report.md`](docs/reliability-report.md) — external integration, async jobs, messaging/DLQ, caching, health checks, and correlation IDs
 - [`docs/progress.md`](docs/progress.md) — running log of what's been built

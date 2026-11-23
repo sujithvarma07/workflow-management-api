@@ -18,6 +18,8 @@ import com.relic.backend.repository.UserRepository;
 import com.relic.backend.security.SecurityUtils;
 import com.relic.backend.service.ProjectService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -25,6 +27,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
+/**
+ * Project lookups by id are cached under the "projects" cache (see
+ * CacheConfig); update/delete evict that entry. addMember/removeMember
+ * are not cache-evicting operations here because ProjectResponse does
+ * not carry membership data, so membership changes do not affect what
+ * is cached.
+ */
 @Service
 @RequiredArgsConstructor
 public class ProjectServiceImpl implements ProjectService {
@@ -85,12 +94,14 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(value = "projects", key = "#id")
     public ProjectResponse getById(Long id) {
         return toResponse(findProjectOrThrow(id));
     }
 
     @Override
     @Transactional
+    @CacheEvict(value = "projects", key = "#id")
     public ProjectResponse update(Long id, ProjectRequest request) {
         Project project = findProjectOrThrow(id);
 
@@ -115,6 +126,7 @@ public class ProjectServiceImpl implements ProjectService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "projects", key = "#id")
     public void delete(Long id) {
         Project project = findProjectOrThrow(id);
         projectRepository.delete(project);

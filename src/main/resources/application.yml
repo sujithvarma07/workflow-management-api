@@ -23,6 +23,22 @@ spring:
       ddl-auto: update
     show-sql: false
     open-in-view: false
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+app:
+  external-api:
+    # Points at a local stub by default for dev - there is no real
+    # notification service to call in this environment. See
+    # docs/reliability-report.md for how this is meant to be exercised.
+    base-url: ${EXTERNAL_API_BASE_URL:http://localhost:9090}
 
 ---
 spring:
@@ -45,6 +61,22 @@ spring:
       ddl-auto: validate
     show-sql: false
     open-in-view: false
+  rabbitmq:
+    host: ${RABBITMQ_HOST}
+    port: ${RABBITMQ_PORT}
+    username: ${RABBITMQ_USERNAME}
+    password: ${RABBITMQ_PASSWORD}
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT}
+      password: ${REDIS_PASSWORD:}
+
+app:
+  external-api:
+    # No default - a production deployment must point this at a real
+    # endpoint explicitly rather than silently falling back to localhost.
+    base-url: ${EXTERNAL_API_BASE_URL}
 
 ---
 server:
@@ -66,6 +98,27 @@ app:
     admin-bootstrap-password: ${ADMIN_BOOTSTRAP_PASSWORD}
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  external-api:
+    connect-timeout-ms: ${EXTERNAL_API_CONNECT_TIMEOUT_MS:3000}
+    response-timeout-ms: ${EXTERNAL_API_RESPONSE_TIMEOUT_MS:5000}
+  batch:
+    chunk-size: ${BULK_IMPORT_CHUNK_SIZE:50}
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      externalNotification:
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 10
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        # How long the breaker stays OPEN (rejecting calls immediately via
+        # CallNotPermittedException) before it lets one trial call through
+        # to see if the dependency has recovered.
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        register-health-indicator: true
 
 management:
   endpoints:
@@ -75,11 +128,24 @@ management:
   endpoint:
     health:
       show-details: when-authorized
+      probes:
+        enabled: true
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+    rabbit:
+      enabled: true
+    redis:
+      enabled: true
 
 logging:
   level:
     root: INFO
     com.relic.backend: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [correlationId=%X{correlationId:-n/a}] %-5level %logger{36} - %msg%n"
 
 ---
 spring:
@@ -95,8 +161,37 @@ spring:
     hibernate:
       ddl-auto: create-drop
     show-sql: false
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    # The test profile's @SpringBootTest context has no real broker to
+    # talk to. Spring AMQP's connection factory itself only connects lazily
+    # on first use, but a @RabbitListener container's SmartLifecycle starts
+    # (and tries to connect) at context startup regardless - this turns
+    # that off so tests don't spend their startup retrying a connection
+    # that was never going to succeed. Messaging behavior itself
+    # (TaskCompletedEventPublisher, TaskCompletedMessageListener,
+    # DeadLetterReplayService) is therefore exercised only by code review
+    # against the documented RabbitMQ/Spring AMQP contract, not by a live
+    # integration test - see docs/reliability-report.md.
+    listener:
+      simple:
+        auto-startup: false
+  data:
+    redis:
+      host: localhost
+      port: 6379
 
 app:
+  external-api:
+    # Fixture only - nothing in the test suite actually calls out to this;
+    # ExternalNotificationClient's behavior under success/timeout/circuit-
+    # open is documented, not live-tested, for the same reason as above.
+    base-url: http://localhost:9090
+  batch:
+    chunk-size: 50
   security:
     # Fixed, obviously-fake fixture values used only by the automated test
     # suite against a throwaway in-memory database - this document is last

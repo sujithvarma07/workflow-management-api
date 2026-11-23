@@ -14,12 +14,23 @@ import com.relic.backend.repository.UserRepository;
 import com.relic.backend.security.RefreshTokenService;
 import com.relic.backend.service.UserService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.cache.annotation.CacheEvict;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+/**
+ * User lookups by id are cached under the "users" cache (see
+ * CacheConfig); update/updateStatus/delete evict that entry.
+ * getByUsername is deliberately NOT cached: it is looked up by a
+ * different key than the id-keyed cache uses, and caching it under a
+ * second key would need its own eviction wiring for no real benefit,
+ * since it is only used by the auth path, which already runs once per
+ * login/refresh rather than on a hot read path.
+ */
 @Service
 @RequiredArgsConstructor
 public class UserServiceImpl implements UserService {
@@ -68,6 +79,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional(readOnly = true)
+    @Cacheable(value = "users", key = "#id")
     public UserResponse getById(Long id) {
         return toResponse(findUserOrThrow(id));
     }
@@ -82,6 +94,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "users", key = "#id")
     public UserResponse update(Long id, UserUpdateRequest request) {
         User user = findUserOrThrow(id);
 
@@ -99,6 +112,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "users", key = "#id")
     public UserResponse updateStatus(Long id, UserStatusUpdateRequest request) {
         User user = findUserOrThrow(id);
         UserStatus previous = user.getStatus();
@@ -122,6 +136,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
+    @CacheEvict(value = "users", key = "#id")
     public void delete(Long id) {
         User user = findUserOrThrow(id);
         userRepository.delete(user);
